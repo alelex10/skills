@@ -22,7 +22,7 @@ From the orchestrator:
 
 ## Data Contract
 
-> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/cr-common.md`.
+> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/_shared/cr-common.md`.
 
 - **engram**: Save artifact as `code-review/{pr-number}/data`. Update state as `code-review/{pr-number}/state`.
 - **openspec**: Read and write per `skills/_shared/openspec-convention.md`.
@@ -75,6 +75,8 @@ Follow **Section C** from `skills/_shared/cr-common.md`.
 - artifact: `data`
 - topic_key: `code-review/{pr-number}/data`
 - type: `discovery`
+
+If `mem_save` is unavailable (task sub-agent limitation), include the full diff and metadata in the `detailed_report` field of your return envelope so the orchestrator can persist it.
 
 Content format:
 ```

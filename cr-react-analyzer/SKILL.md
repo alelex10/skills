@@ -25,7 +25,7 @@ From the orchestrator:
 
 ## Data Contract
 
-> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/cr-common.md`.
+> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/_shared/cr-common.md`.
 
 - **engram**: Read `code-review/{pr-number}/data` (required). Save artifact as `code-review/{pr-number}/categories/react-vercel`.
 - **openspec**: Read and write per `skills/_shared/openspec-convention.md`.
@@ -40,12 +40,21 @@ Follow **Section A** from `skills/_shared/cr-common.md`.
 
 ### Step 2: Retrieve PR Data
 
-Retrieve `code-review/{pr-number}/data` using **2-step retrieval**:
+Retrieve `code-review/{pr-number}/data`:
 
+**Method A — Engram (preferred):**
 1. `mem_search(query: "code-review/{pr-number}/data")`
 2. `mem_get_observation(id)` for full content
 
-GATE: Do NOT proceed if no diff data was retrieved.
+**Method B — gh CLI fallback (if Engram unavailable):**
+1. `gh pr diff <pr-number>` → full diff
+2. `gh pr view <pr-number> --json number,title,author,body,headRefName,baseRefName,state,files,additions,deletions,changedFiles` → metadata
+
+**Method C — local file read fallback (if gh unavailable):**
+1. Read the changed files from the working directory using the `read` tool
+2. Parse the changes from the file content
+
+GATE: Fall back through methods A → B → C. Only return `blocked` if ALL methods fail.
 
 ### Step 3: Detect Project Stack
 
@@ -201,7 +210,7 @@ Return to the orchestrator:
 
 - EXECUTOR BOUNDARY: You are an EXECUTOR, not the orchestrator. Do the work yourself. Do NOT launch sub-agents, do NOT call `delegate` or `task`, and do NOT hand execution back unless you hit a real blocker.
 - DETECT AND ANALYZE — this agent does COMPLETE review: detects violations, reads the correct pattern from Vercel rules, and proposes the exact fix.
-- GATE: Do NOT proceed to Step 4 if no diff data was retrieved in Step 2.
+- GATE: Fall back through methods A → B → C in Step 2. Only return `blocked` if ALL methods fail.
 - Before loading rule files, check if they exist. If individual files are missing, FALLBACK to reading the compiled `AGENTS.md`.
 - NEVER fabricate findings — if no rules match the diff, produce an empty review with zero findings.
 - **Size budget**: React/Vercel review artifact MUST be under 4000 words total.

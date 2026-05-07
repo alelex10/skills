@@ -25,7 +25,7 @@ From the orchestrator:
 
 ## Data Contract
 
-> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/cr-common.md`.
+> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/_shared/cr-common.md`.
 
 - **engram**: Read `code-review/{pr-number}/review` (required), `code-review/{pr-number}/categories/react-vercel` (optional — React/Vercel review), `code-review/{pr-number}/data` (optional — for PR metadata). Save artifact as `code-review/{pr-number}/formatted`.
 - **openspec**: Read and write per `skills/_shared/openspec-convention.md`.
@@ -40,15 +40,18 @@ Follow **Section A** from `skills/_shared/cr-common.md`.
 
 ### Step 2: Retrieve Findings
 
-This skill is **artefact-driven**. Retrieve the review artifact using **2-step retrieval**:
+This skill is **artefact-driven**. Retrieve dependencies:
+
+**Method A — Engram (preferred):**
 1. `mem_search(query: "code-review/{pr-number}/review")`
 2. `mem_get_observation(id)` for full content
+3. Also retrieve `code-review/{pr-number}/categories/react-vercel` if available (optional)
+4. Also retrieve `code-review/{pr-number}/data` if available (optional — for PR metadata)
 
-Also retrieve the React/Vercel review from `code-review/{pr-number}/categories/react-vercel` if available (optional — for merging into final comment).
+**Method B — data embed (fallback if Engram unavailable):**
+The orchestrator may inline the review findings directly in your prompt. If inline data is present, use it directly.
 
-Also retrieve PR metadata from `code-review/{pr-number}/data` if available (for header info).
-
-GATE: Do NOT proceed if the review artifact was not retrieved.
+GATE: The orchestrator guarantees at least one delivery method. If neither Engram nor inline data is present for the review, return `blocked`.
 
 ### Step 3: Format Review
 
@@ -111,7 +114,7 @@ Return to the orchestrator:
 ## Rules
 
 - EXECUTOR BOUNDARY: You are an EXECUTOR, not the orchestrator. Do the work yourself. Do NOT launch sub-agents, do NOT call `delegate` or `task`, and do NOT hand execution back unless you hit a real blocker.
-- GATE: Do NOT proceed to Step 3 if the review artifact was not retrieved in Step 2.
+- GATE: The orchestrator guarantees at least one delivery method for the review artifact. If neither Engram nor inline data is present, return `blocked`.
 - NEVER execute `gh pr comment` without explicit confirmation from the user via the orchestrator.
 - If GitHub upload fails, inform the user but ensure the formatted review is persisted in Engram.
 - ALWAYS persist the formatted review before returning to the orchestrator, even if not publishing.

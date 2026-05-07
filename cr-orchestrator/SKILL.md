@@ -42,7 +42,7 @@ analyze (cr-analyzer) -> publish (cr-publisher) -> learn (cr-learning)
 
 ### Resolution Rules
 
-1. A phase can ONLY execute if ALL required dependencies are satisfied (artifacts exist in Engram)
+1. A phase can ONLY execute if ALL required dependencies are satisfied (artifacts exist in Engram OR are injected inline in the prompt)
 2. Optional dependencies are read if present, skipped if absent — they do NOT block execution
 3. A phase writes exactly ONE primary artifact
 4. After a phase completes, the orchestrator updates state and checks DAG for next phase
@@ -87,13 +87,30 @@ analyze (cr-analyzer) -> publish (cr-publisher) -> learn (cr-learning)
 
 ## Artefact-Driven Contract (CRITICAL)
 
-Este flujo es **artefact-driven** (como SDD): los sub-agentes NO dependen de payloads inyectados en el prompt.
+Este flujo es **artefact-driven**: los sub-agentes leen sus dependencias desde un backend de artefactos.
 
-- El orquestador pasa **referencias** (PR number + topic keys), NO el contenido completo del diff/findings.
-- Cada sub-agente lee sus dependencias desde Engram mediante **2-step retrieval**:
-  1. `mem_search(query: "{topic_key}")`
-  2. `mem_get_observation(id)` para contenido completo (evita truncamiento)
-- Antes de lanzar una fase, el orquestador verifica que el artefacto previo exista en Engram.
+**⚠️ Limitación conocida — sub-agentes `task` y Engram:**
+Los sub-agentes lanzados mediante `task` tool pueden NO tener acceso a las herramientas de Engram (`mem_search`, `mem_get_observation`, `mem_save`). Esto significa que NO pueden leer/escribir artefactos en Engram por sí mismos.
+
+**Estrategia de doble entrega (Dual Delivery):**
+1. El orquestador persiste artefactos en Engram (para recovery entre sesiones)
+2. El orquestador TAMBIÉN inyecta los datos inline en el prompt del sub-agente como bloque de texto estructurado
+3. El sub-agente intenta Engram primero (Method A); si falla, usa los datos inline del prompt (Method B)
+
+**Referencias vs inline:**
+- El orquestador SIEMPRE pasa `topic_key` como referencia (para recovery/compatibilidad)
+- El orquestador TAMBIÉN incluye el contenido del artefacto en el prompt como fallback
+- Cada sub-agente decide qué método usar según las herramientas disponibles
+
+**Ejemplo de inyección inline:**
+```
+## Artifact Data (inline fallback)
+### code-review/1100/data
+Full diff and metadata...
+
+### code-review/1100/categories/security
+Security findings...
+```
 
 ## Delegation Boundary
 
@@ -132,7 +149,7 @@ Before using Read, Edit, Write, or Grep tools on source/config/skill files:
 - **DO NOT** categorizar smells inline "para ir rápido" — delegar a cr-categorizer
 - **DO NOT** analizar findings inline "para ir rápido" — delegar a cr-analyzer
 - **DO NOT** formatear el comentario GitHub manualmente — delegar a cr-publisher
-- **DO NOT** inyectar el diff completo en el prompt de cr-analyzer — pasar topic_key
+- **DO NOT** confiar únicamente en Engram para la entrega de datos — los sub-agentes `task` pueden no tener acceso. Usar Dual Delivery: topic_key + inline fallback
 - **DO NOT** hacer "quick analysis" para ahorrar un delegation — bloats context → compaction → state loss
 
 ### Inline Execution Fallback (EXCEPTION)
@@ -190,58 +207,72 @@ Before launching `cr-fetcher`, the orchestrator MUST run `git remote get-url ori
 
 1. Lanza `cr-fetcher` pasando:
    - `pr-number` o `branch`
-2. Cuando el fetcher retorne, muestra el **[Phase Report](#phase-report-format)** al usuario.
-3. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 2.
+2. Cuando el fetcher retorne, recoge el diff y metadata del resultado. El orchestrator DEBE persistir estos datos en Engram manualmente (los sub-agentes `task` no pueden hacerlo) usando:
+   ```
+   mem_save(title: "code-review/{pr}/data", topic_key: "code-review/{pr}/data", type: "discovery", content: "{diff + metadata}")
+   ```
+3. Muestra el **[Phase Report](#phase-report-format)** al usuario.
+4. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 2.
 
 ### Phase 2: Categorization
 
-1. Lanza los 4 agentes especializados **en paralelo** (3 categorizadores + 1 analyzer):
+1. Lee el diff del PR desde Engram (`mem_get_observation`) para tenerlo disponible.
+2. Lanza los 4 agentes especializados **en paralelo** (3 categorizadores + 1 analyzer). Incluye el diff inline como fallback de datos:
 
    **A. cr-security-categorizer**
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
    - `topic_key_categories`: `code-review/{pr-number}/categories/security`
    - `artifact_store_mode`: `engram`
+   - `inline_data_diff`: `{diff content}` (fallback si Engram no está disponible para el sub-agente)
 
    **B. cr-performance-categorizer**
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
    - `topic_key_categories`: `code-review/{pr-number}/categories/performance`
    - `artifact_store_mode`: `engram`
+   - `inline_data_diff`: `{diff content}`
 
    **C. cr-architecture-categorizer**
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
    - `topic_key_categories`: `code-review/{pr-number}/categories/architecture`
    - `artifact_store_mode`: `engram`
+   - `inline_data_diff`: `{diff content}`
 
    **D. cr-react-analyzer**
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
    - `topic_key_review`: `code-review/{pr-number}/categories/react-vercel`
    - `artifact_store_mode`: `engram`
+   - `inline_data_diff`: `{diff content}`
 
-2. Espera a que los 4 retornen.
-3. Si alguno retorna `blocked`, reporta al usuario y detén el pipeline.
-4. Si alguno retorna `partial`, advierte al usuario pero continúa con los índices que sí llegaron.
-5. Verifica que los 4 artefactos existan en Engram.
-6. Muestra el **[Phase Report](#phase-report-format)** con la tabla de los 4 categorizadores y sus hallazgos.
-7. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 3.
+3. Espera a que los 4 retornen.
+4. Si alguno retorna `blocked`, reporta al usuario y detén el pipeline.
+5. Si alguno retorna `partial`, advierte al usuario pero continúa con los índices que sí llegaron.
+6. Recoge los resultados de cada categorizador. Si algún categorizador incluyó su artifact en `detailed_report` (por no poder usar `mem_save`), el orchestrator DEBE persistirlo a Engram manualmente.
+7. Verifica que los 4 artefactos estén disponibles (en Engram o en los resultados inline).
+8. Muestra el **[Phase Report](#phase-report-format)** con la tabla de los 4 categorizadores y sus hallazgos.
+9. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 3.
 
 ### Phase 3: Analysis
 
-1. Lanza `cr-analyzer` pasando:
+1. Lee los artifacts de categorización desde Engram o desde los resultados inline de los sub-agentes.
+2. Inyecta el contenido de las categorías inline en el prompt de `cr-analyzer` como fallback de datos.
+3. Lanza `cr-analyzer` pasando:
    - `pr-number`
    - `topic_key_categories`:
      - `code-review/{pr-number}/categories/security`
      - `code-review/{pr-number}/categories/performance`
      - `code-review/{pr-number}/categories/architecture`
-     - `code-review/{pr-number}/categories/react-vercel` (optional — if present, the analyzer may reference it for cross-category analysis, but it is already a complete review)
-   - `topic_key_data`: `code-review/{pr-number}/data` (optional — for deep inspection)
+     - `code-review/{pr-number}/categories/react-vercel` (optional)
+   - `topic_key_data`: `code-review/{pr-number}/data` (optional)
    - `topic_key_review`: `code-review/{pr-number}/review`
+   - `inline_categories`: `{contenido de los 3+ indices de categorías}` (fallback inline)
    - Referencia a convenciones del repo (ej: path a `AGENTS.md`), si aplica.
-2. Cuando el analyzer retorne, muestra el **[Phase Report](#phase-report-format)** con los findings generados.
-3. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 4.
+4. Cuando el analyzer retorne, recoge el review. Si incluyó el artifact en `detailed_report`, persístelo a Engram manualmente.
+5. Muestra el **[Phase Report](#phase-report-format)** con los findings generados.
+6. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 4.
 
 ### Phase 4: Publishing
 

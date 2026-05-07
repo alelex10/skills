@@ -29,7 +29,7 @@ From the orchestrator:
 
 ## Data Contract
 
-> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/cr-common.md`.
+> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/_shared/cr-common.md`.
 
 - **engram**: Read `code-review/{pr-number}/categories/security` (required), `code-review/{pr-number}/categories/performance` (required), `code-review/{pr-number}/categories/architecture` (required), `code-review/{pr-number}/data` (optional), `code-review-patterns*` (optional). Save artifact as `code-review/{pr-number}/review`. Optionally update `code-review-patterns*` incrementally.
 - **openspec**: Read and write per `skills/_shared/openspec-convention.md`.
@@ -44,18 +44,22 @@ Follow **Section A** from `skills/_shared/cr-common.md`.
 
 ### Step 2: Retrieve Artifacts
 
-This skill is **artefact-driven**. Retrieve dependencies using **2-step retrieval**:
+This skill is **artefact-driven**. Retrieve dependencies using this priority:
 
+**Method A — Engram (preferred):**
 1. `mem_search(query: "code-review/{pr-number}/categories/security")` → save ID
 2. `mem_search(query: "code-review/{pr-number}/categories/performance")` → save ID
 3. `mem_search(query: "code-review/{pr-number}/categories/architecture")` → save ID
-4. `mem_search(query: "code-review/{pr-number}/data")` → save ID (optional — for deep inspection of specific files)
+4. `mem_search(query: "code-review/{pr-number}/data")` → save ID (optional — for deep inspection)
 5. `mem_search(query: "code-review-patterns")` → save IDs (optional — historical patterns)
-6. Run `mem_get_observation(id)` for ALL saved IDs in parallel.
+6. `mem_get_observation(id)` for ALL saved IDs in parallel.
+
+**Method B — data embed (fallback if Engram unavailable):**
+The orchestrator may inline category findings directly in your prompt as blockquoted text. If you see inline category data in your prompt, parse and use it directly.
 
 If repo conventions are referenced, read them (e.g., `AGENTS.md`).
 
-GATE: Do NOT proceed if ANY of the three `categories/*` artifacts was not retrieved.
+GATE: The orchestrator guarantees at least one delivery method. At minimum, you MUST have the three `categories/*` findings (from Engram or inline). If neither Engram nor inline data is present for a required category, return `blocked`.
 
 ### Step 3: Understand the Change
 
@@ -144,7 +148,7 @@ Return to the orchestrator:
 ## Rules
 
 - EXECUTOR BOUNDARY: You are an EXECUTOR, not the orchestrator. Do the work yourself. Do NOT launch sub-agents, do NOT call `delegate` or `task`, and do NOT hand execution back unless you hit a real blocker.
-- GATE: Do NOT proceed to Step 4 if ANY of the three categories/* artifacts was not retrieved in Step 2.
+- GATE: The orchestrator guarantees at least one delivery method for category artifacts. If neither Engram nor inline data is present for a required category, return `blocked`.
 - NEVER approve code you haven't read with sufficient context (±80 lines).
 - ALWAYS cite specific lines and code in findings — no vague references.
 - If a finding is subjective, flag it as `needs_context`, not `confirmed_issue`.

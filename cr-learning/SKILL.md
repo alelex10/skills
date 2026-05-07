@@ -22,7 +22,7 @@ From the orchestrator:
 
 ## Data Contract
 
-> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/cr-common.md`.
+> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/_shared/cr-common.md`.
 
 - **engram**: Read `code-review-patterns*` (optional — existing patterns). Save artifact as `code-review-patterns/{category}` (one per category, with merge).
 - **openspec**: Read and write per `skills/_shared/openspec-convention.md`.
