@@ -36,8 +36,8 @@ Every orchestrator MUST have:
 |---|---------|-----------|------|
 | 1 | Delegation Boundary | "NEVER execute" + responsibility table | `references/orchestrator-pattern-delegation-boundary.md` |
 | 2 | DAG / Dependency Graph | Phase order + dependencies | `references/orchestrator-pattern-dag.md` |
-| 3 | State Persistence | Persist state for recovery | `references/orchestrator-pattern-state-persistence.md` |
-| 4 | Slash Commands | User-facing commands | `references/orchestrator-pattern-slash-commands.md` |
+| 3 | State Persistence | Persist state for recovery (backend-agnostic) | `references/orchestrator-pattern-state-persistence.md` |
+| 4 | Entry Commands | At least one user-facing command; shape depends on the skill | (see `## Commands` section below) |
 
 ## Optional
 
@@ -116,60 +116,62 @@ Orchestrator passes topic keys/paths, NOT content. Sub-agents retrieve themselve
 
 ## State Persistence Template
 
+State and artifacts use a **uniform `location`** field that is backend-agnostic. The orchestrator resolves it according to the active backend.
+
 ```markdown
 ## State Management
 
-- `domain/identifier/state`: State and metadata
+- State artifact location: backend-dependent (see Resolution table below)
 
-### State Artifact
+### State Artifact (shape)
 
 ```yaml
 phase: current-phase
+backend: engram | local | hybrid | none
 artifacts:
   - name: artifact-a
-    topic_key: domain/context/a
+    location: "engram:domain/context/a"   # or "file:.atl/domain/a.yaml"
     status: complete
   - name: artifact-b
-    topic_key: domain/context/b
+    location: "engram:domain/context/b"
     status: in_progress
 last_updated: 2025-01-15T14:30:00Z
 ```
+
+### Location resolution
+
+| Backend | `location` prefix | Read | Write |
+|---------|-------------------|------|-------|
+| `engram` | `engram:{topic_key}` | `mem_search` → `mem_get_observation` | `mem_save` |
+| `local` | `file:{relative_path}` | filesystem read | filesystem write (create parents) |
+| `hybrid` | both prefixes — write to both, read engram first | engram → fallback file | both |
+| `none` | n/a | inline, no recovery possible | inline, warn user |
+
+### Recovery Rules
+
+1. Read state via the active backend.
+2. If state exists and `phase != completed` → resume from that phase (prompt user if applicable).
+3. If state missing → start from scratch.
+4. Each sub-skill receives the **location reference**, not the content.
 
 ### State Transitions
 
 ```
 pending -> phase-a -> phase-b -> ... -> completed
 ```
-
-### Recovery Rules
-
-| Mode | Protocol |
-|------|----------|
-| `engram` | `mem_search` → `mem_get_observation` |
-| `openspec` | Read `openspec/changes/.../state.yaml` |
-| `hybrid` | Try engram first, fallback |
-| `none` | No recovery — explain to user |
 ```
 
-## Slash Commands Template
-
-```markdown
 ## Commands
 
-- `/command-start [params]`: Start workflow
-- `/command-continue`: Continue with next phase
-- `/command-status`: Show current state
-- `/command-ff`: Fast-forward to completion
-- `/command-phase [params]`: Run specific phase
+Slash commands are **not** prescribed by this pattern. They depend on the specific skill or family of skills being generated:
 
-### Continue Logic
+- Single-command skills: one slash command does everything (`/foo <args>`).
+- Multi-phase skills: separate commands per phase (`/foo-explore`, `/foo-apply`).
+- Hybrid: one entry command that detects state and offers continuation (recommended for skills with interruptible flows).
 
-1. Read state to determine current phase
-2. Find first incomplete phase
-3. Verify required dependencies exist
-4. If missing → inform user
-5. If OK → delegate sub-agent
-```
+If your skill persists state and supports resumption, prefer the **hybrid** pattern: the single entry command checks for an incomplete prior run and prompts the user to continue or restart. Avoid proliferating `*-continue`, `*-status`, `*-ff` commands unless the skill genuinely benefits from explicit phase invocation.
+
+Define your skill's commands in its own `## Commands` section. The orchestrator pattern only requires that **at least one** command exists as the user-facing entry point.
 
 ## Inline Execution Fallback
 
@@ -200,22 +202,6 @@ After each sub-agent returns, check `skill_resolution` field:
 | `fallback-path` | Found via path | Re-inject |
 | `none` | No standards | Re-inject |
 
-## Example: SDD Orchestrator Commands
-
-```markdown
-## Commands
-
-| Command | Action |
-|---------|-------|
-| `/sdd-init` | Run `sdd-init` |
-| `/sdd-explore <topic>` | Run `sdd-explore` |
-| `/sdd-continue [change]` | Continue next phase |
-| `/sdd-ff [change]` | Execute through tasks |
-| `/sdd-apply [change]` | Run `sdd-apply` |
-| `/sdd-verify [change]` | Run `sdd-verify` |
-| `/sdd-archive [change]` | Run `sdd-archive` |
-```
-
 ## Combined with Executor Patterns
 
 An orchestrator skill COMPLETE uses:
@@ -231,7 +217,6 @@ An orchestrator skill COMPLETE uses:
   - `orchestrator-pattern-delegation-boundary.md`
   - `orchestrator-pattern-dag.md`
   - `orchestrator-pattern-state-persistence.md`
-  - `orchestrator-pattern-slash-commands.md`
   - `orchestrator-pattern-result-contract.md`
 
 - **Executor pattern**: See `skill-template-pattern` SKILL.md for execution patterns
