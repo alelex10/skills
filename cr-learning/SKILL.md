@@ -22,7 +22,7 @@ From the orchestrator:
 
 ## Data Contract
 
-> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/_shared/cr-common.md`.
+> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/common/cr-common.md`.
 
 - **engram**: Read `code-review-patterns*` (optional — existing patterns). Save artifact as `code-review-patterns/{category}` (one per category, with merge).
 - **openspec**: Read and write per `skills/_shared/openspec-convention.md`.
@@ -33,7 +33,7 @@ From the orchestrator:
 
 ### Step 1: Load Skills
 
-Follow **Section A** from `skills/_shared/cr-common.md`.
+Follow **Section A** from `skills/common/cr-common.md`.
 
 ### Step 2: Parse User Input
 
@@ -71,7 +71,7 @@ GATE: Do NOT overwrite existing patterns. Always merge incrementally.
 
 **This step is MANDATORY — do NOT skip it.**
 
-Follow **Section C** from `skills/_shared/cr-common.md`.
+Follow **Section C** from `skills/common/cr-common.md`.
 - artifact: `code-review-patterns/{category}` (one or more)
 - topic_key: `code-review-patterns/{category}`
 - type: `discovery`
@@ -98,4 +98,4 @@ Return to the orchestrator:
 - Extract the general principle, not just the specific case from this PR.
 - Check for duplicates before persisting — if the pattern already exists, do not add it again.
 - **Size budget**: Each pattern category MUST be under 500 words.
-- Return envelope per **Section D** from `skills/_shared/cr-common.md`.
+- Return envelope per **Section D** from `skills/common/cr-common.md`.

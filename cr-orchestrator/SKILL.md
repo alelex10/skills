@@ -1,116 +1,136 @@
 ---
 name: cr-orchestrator
 description: >
-  Coordinador de flujo de Code Review para Agent Teams Lite.
+  Coordinador de flujo de Code Review para Agent Teams Lite — diseño generalista multi-agente.
+  Pipeline: fetch → route → [6 reviewers en paralelo] → publisher/merger → learning.
   Trigger: Cuando el usuario ejecuta comandos /cr-start, /cr-continue o pide revisar un PR.
 license: MIT
 metadata:
   author: alelex10
-  version: "1.0"
+  version: "2.0"
 ---
 
 ## Purpose
 
-Coordina el proceso de revisión de código dividiéndolo en fases ejecutadas por sub-agentes especializados (`cr-fetcher`, `cr-categorizer`, `cr-analyzer`, `cr-publisher`, `cr-learning`). Mantiene el estado del proceso en Engram y asegura que se sigan los estándares del proyecto.
+Coordina el proceso de revisión de código dividiéndolo en fases ejecutadas por sub-agentes especializados. El pipeline es **generalista por disciplina**: cada reviewer analiza desde una perspectiva distinta sin ataduras a tecnologías específicas.
+
+> **Artifact store**: El pipeline CR usa **exclusivamente Engram** para persistencia. No soporta `openspec`, `hybrid`, ni `none`. Los sub-agentes leen y escriben artefactos vía `mem_search` / `mem_save` con topic keys `code-review/{pr}/*`. Si Engram no está disponible, el pipeline no funciona — advertir al usuario.
 
 ## Resources
 
 - [GitHub CLI Cheatsheet](./gh-cheatsheet.md): Comandos recomendados para interactuar con PRs y obtener contexto de revisiones.
+
+## Design Philosophy
+
+> No necesitás más inteligencia, necesitás más perspectivas.
+
+Cada reviewer es un especialista generalista que responde UNA pregunta clave desde su lente de análisis. El Router decide cuáles ejecutar según el cambio. El Publisher consolida, deduplica, prioriza y formatea.
+
+## Reviewers
+
+| Reviewer | Pregunta clave | Lente de análisis |
+|----------|---------------|-------------------|
+| `cr-correctness` | ¿El código funciona correctamente? | Bugs lógicos, nulls, edge cases, race conditions, manejo de errores |
+| `cr-architecture` | ¿Está bien diseñado? | SRP, coupling, cohesión, modularidad, límites de dominio, deuda técnica |
+| `cr-security` | ¿Puede ser explotado o abusado? | Validación de inputs, auth, inyecciones, secretos, escalación de privilegios |
+| `cr-reliability` | ¿Qué pasa cuando algo falla? | Retries, timeouts, idempotencia, consistencia, concurrencia, recuperación |
+| `cr-performance` | ¿Escala y rinde bien? | Complejidad, memoria, latencia, IO, caching, contención |
+| `cr-quality` | ¿Es mantenible y claro? | Naming, legibilidad, complejidad, duplicación, code smells, testabilidad |
 
 ## Dependency Graph
 
 ```
 fetch (cr-fetcher)
   ↓
-[parallel] security-categorize (cr-security-categorizer)
-            performance-categorize (cr-performance-categorizer)
-            architecture-categorize (cr-architecture-categorizer)
-            react-analyze (cr-react-analyzer)
+route (cr-router)
   ↓
-analyze (cr-analyzer) -> publish (cr-publisher) -> learn (cr-learning)
+[parallel] correctness (cr-correctness)
+           architecture (cr-architecture)
+           security (cr-security)
+           reliability (cr-reliability)
+           performance (cr-performance)
+           quality (cr-quality)
+  ↓
+publish (cr-publisher) → learn (cr-learning)
 ```
+
+**Nota**: Solo los reviewers seleccionados por `cr-router` se ejecutan en la fase paralela.
 
 ### Dependencies by Phase
 
-| Phase        | Required Dependencies                                                                                                         | Optional Dependencies   | Writes Artifact                                                                                                               |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `fetch`      | None                                                                                                                          | None                    | `code-review/{pr}/data`                                                                                                       |
-| `categorize` | `code-review/{pr}/data`                                                                                                       | `code-review-patterns*` | `code-review/{pr}/categories/security`, `code-review/{pr}/categories/performance`, `code-review/{pr}/categories/architecture`, `code-review/{pr}/categories/react-vercel` |
-| `analyze`    | `code-review/{pr}/categories/security`, `code-review/{pr}/categories/performance`, `code-review/{pr}/categories/architecture` | `code-review/{pr}/data` | `code-review/{pr}/review`                                                                                                     |
-| `publish`    | `code-review/{pr}/review`                                                                                                     | `code-review/{pr}/categories/react-vercel` | `code-review/{pr}/formatted`                                                                                                  |
-| `learn`      | `code-review/{pr}/formatted`                                                                                                  | None                    | `code-review-patterns*`                                                                                                       |
+| Phase | Required Dependencies | Optional Dependencies | Writes Artifact |
+|-------|----------------------|----------------------|-----------------|
+| `fetch` | None | None | `code-review/{pr}/data` |
+| `route` | `code-review/{pr}/data` | None | `code-review/{pr}/route` |
+| `review` | `code-review/{pr}/data`, `code-review/{pr}/route` | `code-review-patterns*` | `code-review/{pr}/reviews/{discipline}` |
+| `publish` | `code-review/{pr}/reviews/*` (all from route) | None | `code-review/{pr}/formatted` |
+| `learn` | `code-review/{pr}/formatted` | None | `code-review-patterns*` |
 
 ### Resolution Rules
 
-1. A phase can ONLY execute if ALL required dependencies are satisfied (artifacts exist in Engram OR are injected inline in the prompt)
+1. A phase can ONLY execute if ALL required dependencies are satisfied
 2. Optional dependencies are read if present, skipped if absent — they do NOT block execution
-3. A phase writes exactly ONE primary artifact
-4. After a phase completes, the orchestrator updates state and checks DAG for next phase
+3. Route drives which reviewers run — don't launch reviewers not in the route plan
+4. Publisher receives all reviews that were generated and consolidates them
 
 ## State Management (Engram)
 
-- `code-review/{pr-number}/state`: Estado y metadata del flujo (upsert por topic_key).
-  - Status: `pending`, `fetching`, `categorizing`, `analyzing`, `review_ready`, `formatted_ready`, `published`, `learning_done`.
-  - Debe incluir punteros a los topic keys/IDs de los artefactos (`data`, `categories`, `review`, `formatted`).
-- `code-review/{pr-number}/data`: Datos crudos del PR (diff, metadata, comentarios) - Escrito por `cr-fetcher`.
-- `code-review/{pr-number}/categories/security`: Índice de smells de seguridad - Escrito por `cr-security-categorizer`.
-- `code-review/{pr-number}/categories/performance`: Índice de smells de performance - Escrito por `cr-performance-categorizer`.
-- `code-review/{pr-number}/categories/architecture`: Índice de smells de arquitectura - Escrito por `cr-architecture-categorizer`.
-- `code-review/{pr-number}/categories/react-vercel`: Review completo de React/Vercel best practices (detección + análisis + fixes) - Escrito por `cr-react-analyzer`.
-- `code-review/{pr-number}/review`: Findings estructurados - Escrito por `cr-analyzer`.
-- `code-review/{pr-number}/formatted`: Markdown final para GitHub - Escrito por `cr-publisher`.
-- `code-review-patterns*`: Base de conocimientos global de patrones de revisión (idealmente particionada por categoría).
+- `code-review/{pr-number}/state`: Estado y metadata del flujo.
+  - Status: `pending`, `fetching`, `routing`, `reviewing`, `publishing`, `published`, `learning_done`
+  - Debe incluir punteros a los topic keys de los artefactos.
+- `code-review/{pr-number}/data`: Datos crudos del PR — Escrito por `cr-fetcher`.
+- `code-review/{pr-number}/route`: Plan de revisión — Escrito por `cr-router`.
+- `code-review/{pr-number}/reviews/lite`: Review generalista — Escrito por `cr-lite` (PRs chicos/medianos).
+- `code-review/{pr-number}/reviews/correctness`: Review de corrección — Escrito por `cr-correctness`.
+- `code-review/{pr-number}/reviews/architecture`: Review de arquitectura — Escrito por `cr-architecture`.
+- `code-review/{pr-number}/reviews/security`: Review de seguridad — Escrito por `cr-security`.
+- `code-review/{pr-number}/reviews/reliability`: Review de confiabilidad — Escrito por `cr-reliability`.
+- `code-review/{pr-number}/reviews/performance`: Review de rendimiento — Escrito por `cr-performance`.
+- `code-review/{pr-number}/reviews/quality`: Review de calidad — Escrito por `cr-quality`.
+- `code-review/{pr-number}/formatted`: Reporte consolidado final — Escrito por `cr-publisher`.
+- `code-review-patterns*`: Base de conocimientos global de patrones.
 
 ### State Transitions
 
 ```
-[pending] -> [fetching] -> [categorizing] -> [analyzing] -> [review_ready] -> [formatted_ready] -> [published] -> [learning_done]
+[pending] → [fetching] → [routing] → [reviewing] → [publishing] → [published] → [learning_done]
 ```
 
-| Status            | Meaning                                                                  |
-| ----------------- | ------------------------------------------------------------------------ |
-| `pending`         | No phase has started yet                                                 |
-| `fetching`        | cr-fetcher is executing                                                  |
-| `categorizing`    | One or more categorizers executing (security, performance, architecture) |
-| `analyzing`       | cr-analyzer is executing                                                 |
-| `review_ready`    | Findings generated, ready for publish                                    |
-| `formatted_ready` | Comment formatted, ready for publish                                     |
-| `published`       | Comment published to GitHub                                              |
-| `learning_done`   | Learnings saved                                                          |
+| Status | Meaning |
+|--------|---------|
+| `pending` | No phase has started yet |
+| `fetching` | cr-fetcher is executing |
+| `routing` | cr-router is executing |
+| `reviewing` | Selected reviewers executing in parallel |
+| `publishing` | cr-publisher is executing |
+| `published` | Comment published to GitHub |
+| `learning_done` | Learnings saved |
 
 ### Recovery Rules
 
-| Mode     | Recovery Protocol                                                         |
-| -------- | ------------------------------------------------------------------------- |
+| Mode | Recovery Protocol |
+|------|-------------------|
 | `engram` | `mem_search(query: "code-review/{pr}/state")` → `mem_get_observation(id)` |
-| `none`   | State not persisted — explain to user and restart                         |
+| `none` | State not persisted — explain to user and restart |
 
 ## Artefact-Driven Contract (CRITICAL)
 
 Este flujo es **artefact-driven**: los sub-agentes leen sus dependencias desde un backend de artefactos.
 
-**⚠️ Limitación conocida — sub-agentes `task` y Engram:**
-Los sub-agentes lanzados mediante `task` tool pueden NO tener acceso a las herramientas de Engram (`mem_search`, `mem_get_observation`, `mem_save`). Esto significa que NO pueden leer/escribir artefactos en Engram por sí mismos.
+### Dual Delivery Strategy
 
-**Estrategia de doble entrega (Dual Delivery):**
 1. El orquestador persiste artefactos en Engram (para recovery entre sesiones)
-2. El orquestador TAMBIÉN inyecta los datos inline en el prompt del sub-agente como bloque de texto estructurado
-3. El sub-agente intenta Engram primero (Method A); si falla, usa los datos inline del prompt (Method B)
+2. El orquestador TAMBIÉN inyecta los datos inline en el prompt del sub-agente como fallback
+3. El sub-agente intenta Engram primero (Method A); si falla, usa los datos inline (Method B)
 
-**Referencias vs inline:**
-- El orquestador SIEMPRE pasa `topic_key` como referencia (para recovery/compatibilidad)
-- El orquestador TAMBIÉN incluye el contenido del artefacto en el prompt como fallback
-- Cada sub-agente decide qué método usar según las herramientas disponibles
+### Route-Driven Execution
 
-**Ejemplo de inyección inline:**
-```
-## Artifact Data (inline fallback)
-### code-review/1100/data
-Full diff and metadata...
+Después de que `cr-router` complete, el orquestador DEBE:
 
-### code-review/1100/categories/security
-Security findings...
-```
+1. Leer `code-review/{pr}/route` para obtener la lista de reviewers seleccionados
+2. Solo lanzar los reviewers que aparecen en el plan con prioridad REQUIRED o RECOMMENDED
+3. Omitir los reviewers con prioridad OPTIONAL (a menos que el usuario lo pida)
+4. Si el route dice `SKIPPED`, saltar directamente a publishing
 
 ## Delegation Boundary
 
@@ -127,42 +147,33 @@ Before using Read, Edit, Write, or Grep tools on source/config/skill files:
 
 ### Responsibility Table
 
-| Action                        | Orchestrator? | Sub-agent? |
-| ----------------------------- | :-----------: | :--------: |
-| Ejecutar `gh pr diff`         |      NO       |    YES     |
-| Categorizar Code Smells       |      NO       |    YES     |
-| Analizar código del PR        |      NO       |    YES     |
-| Generar findings              |      NO       |    YES     |
-| Formatear comentario GitHub   |      NO       |    YES     |
-| Publicar comentario en PR     |      NO       |    YES     |
-| Extraer learnings             |      NO       |    YES     |
-| Cortas respuestas al usuario  |      YES      |     —      |
-| Coordinar fases               |      YES      |     —      |
-| Mostrar resúmenes             |      YES      |     —      |
-| Pedir decisiones al usuario   |      YES      |     —      |
-| Leer/escribir state artifacts |      YES      |     —      |
-| Inyectar contexto en prompts  |      YES      |     —      |
+| Action | Orchestrator? | Sub-agent? |
+|--------|:-----------:|:--------:|
+| Ejecutar `gh pr diff` | NO | YES |
+| Rutear el cambio | NO | YES (cr-router) |
+| Revisar corrección | NO | YES (cr-correctness) |
+| Revisar arquitectura | NO | YES (cr-architecture) |
+| Revisar seguridad | NO | YES (cr-security) |
+| Revisar confiabilidad | NO | YES (cr-reliability) |
+| Revisar rendimiento | NO | YES (cr-performance) |
+| Revisar calidad | NO | YES (cr-quality) |
+| Consolidar y formatear | NO | YES (cr-publisher) |
+| Publicar comentario en PR | NO | YES (cr-publisher) |
+| Extraer learnings | NO | YES (cr-learning) |
+| Cortas respuestas al usuario | YES | — |
+| Coordinar fases | YES | — |
+| Mostrar resúmenes | YES | — |
+| Pedir decisiones al usuario | YES | — |
+| Leer/escribir state artifacts | YES | — |
+| Inyectar contexto en prompts | YES | — |
 
 ### Anti-Patterns (NEVER do these)
 
 - **DO NOT** ejecutar `gh pr diff` para "entender" el PR — delegar a cr-fetcher
-- **DO NOT** categorizar smells inline "para ir rápido" — delegar a cr-categorizer
-- **DO NOT** analizar findings inline "para ir rápido" — delegar a cr-analyzer
-- **DO NOT** formatear el comentario GitHub manualmente — delegar a cr-publisher
-- **DO NOT** confiar únicamente en Engram para la entrega de datos — los sub-agentes `task` pueden no tener acceso. Usar Dual Delivery: topic_key + inline fallback
-- **DO NOT** hacer "quick analysis" para ahorrar un delegation — bloats context → compaction → state loss
-
-### Inline Execution Fallback (EXCEPTION)
-
-When the `skill` tool cannot pass required parameters (e.g., PR number, topic keys) to a sub-agent:
-
-1. Load the sub-agent's SKILL.md directly to get instructions
-2. Execute the phase inline following those instructions
-3. Inject compact rules from skill registry as `## Project Standards (auto-resolved)`
-4. Persist artifacts to backend using the correct topic_key format
-5. Return the structured envelope as specified in Result Contract
-
-This exception applies ONLY to phases where delegation fails. ALWAYS attempt delegation first.
+- **DO NOT** rutear el cambio inline — delegar a cr-router
+- **DO NOT** hacer review inline "para ir rápido" — delegar a los reviewers
+- **DO NOT** consolidar findings manualmente — delegar a cr-publisher
+- **DO NOT** confiar únicamente en Engram para la entrega de datos — usar Dual Delivery
 
 ### Skill Resolution & Feedback Loop
 
@@ -171,22 +182,19 @@ This exception applies ONLY to phases where delegation fails. ALWAYS attempt del
 1. `mem_search(query: "skill-registry", project: "{project}")` → get observation ID
 2. `mem_get_observation(id)` → full registry content
 3. Fallback: read `.atl/skill-registry.md` if engram is not available
-4. Cache the **Compact Rules** section and **User Skills** trigger table
-5. If no registry exists, warn and proceed without project-specific standards
-6. Match relevant skills by code context and task context
-7. Build a `## Project Standards (auto-resolved)` block
-8. Inject into sub-agent prompt BEFORE task-specific instructions
+4. Cache the **Compact Rules** section
+5. Match relevant skills by code context and task context
+6. Build a `## Project Standards (auto-resolved)` block
+7. Inject into sub-agent prompt BEFORE task-specific instructions
 
-**After each sub-agent returns**, check the `skill_resolution` field in its envelope:
+**After each sub-agent returns**, check the `Skill Resolution` field:
 
-| Value               | Meaning                                                                 | Action                                                    |
-| ------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| `injected`          | Standards were passed correctly                                         | No action needed                                          |
-| `fallback-registry` | Block was lost (likely compaction), sub-agent found registry on its own | Re-read registry, re-inject in all subsequent delegations |
-| `fallback-path`     | Sub-agent found standards via hardcoded path                            | Same correction as above                                  |
-| `none`              | No standards found at all                                               | Same correction as above                                  |
-
-This is a **self-correction mechanism**. Compaction loses the injected block. The orchestrator detects this from the sub-agent's response and corrects for subsequent delegations. Do NOT ignore fallback reports.
+| Value | Meaning | Action |
+|-------|---------|--------|
+| `injected` | Standards were passed correctly | No action needed |
+| `fallback-registry` | Block was lost, sub-agent found registry on its own | Re-read registry, re-inject in subsequent delegations |
+| `fallback-path` | Sub-agent found standards via hardcoded path | Same correction as above |
+| `none` | No standards found at all | Same correction as above |
 
 ## Execution Flow
 
@@ -194,7 +202,7 @@ This is a **self-correction mechanism**. Compaction loses the injected block. Th
 
 **Pre-phase validation (MANDATORY):**
 
-Before launching `cr-fetcher`, the orchestrator MUST run `git remote get-url origin` to detect the current local repository. This context MUST be passed to `cr-fetcher` (e.g., as `local_repo_url`) so the fetcher can independently validate repository matching. If the fetcher returns `blocked` due to repo mismatch, the orchestrator MUST stop the pipeline and surface the mismatch message to the user immediately.
+Before launching `cr-fetcher`, run `git remote get-url origin` to detect the current local repository. Pass this as `local_repo_url` to `cr-fetcher`.
 
 **Si no se especifica `<branch_o_pr>`:**
 
@@ -205,83 +213,114 @@ Before launching `cr-fetcher`, the orchestrator MUST run `git remote get-url ori
 
 **Si se especifica `<branch_o_pr>`:**
 
-1. Lanza `cr-fetcher` pasando:
-   - `pr-number` o `branch`
-2. Cuando el fetcher retorne, recoge el diff y metadata del resultado. El orchestrator DEBE persistir estos datos en Engram manualmente (los sub-agentes `task` no pueden hacerlo) usando:
-   ```
-   mem_save(title: "code-review/{pr}/data", topic_key: "code-review/{pr}/data", type: "discovery", content: "{diff + metadata}")
-   ```
+1. Lanza `cr-fetcher` pasando `pr-number` o `branch`.
+2. Cuando el fetcher retorne, el orchestrator DEBE verificar que cr-fetcher persistió el data en Engram correctamente. Si el fetcher reportó `Artifacts: code-review/{pr}/data`, la persistencia fue exitosa. Si no aparece en Artifacts, revisar el `detailed_report` y persistir manualmente como fallback.
 3. Muestra el **[Phase Report](#phase-report-format)** al usuario.
-4. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 2.
+4. **STOP**. Espera confirmación antes de avanzar.
 
-### Phase 2: Categorization
+### Phase 2: Routing
 
-1. Lee el diff del PR desde Engram (`mem_get_observation`) para tenerlo disponible.
-2. Lanza los 4 agentes especializados **en paralelo** (3 categorizadores + 1 analyzer). Incluye el diff inline como fallback de datos:
-
-   **A. cr-security-categorizer**
+1. Lanza `cr-router` pasando:
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
-   - `topic_key_categories`: `code-review/{pr-number}/categories/security`
+   - `topic_key_route`: `code-review/{pr-number}/route`
    - `artifact_store_mode`: `engram`
-   - `inline_data_diff`: `{diff content}` (fallback si Engram no está disponible para el sub-agente)
+   - `inline_data_diff`: `{diff content}` (fallback inline)
 
-   **B. cr-performance-categorizer**
+2. Cuando el router retorne, recoge el plan. Si incluyó el artifact en `detailed_report`, persístelo a Engram manualmente.
+
+3. El router devuelve `Reviewers: {lista}` en su envelope. Lee qué reviewers seleccionó y sus prioridades.
+
+4. Si el router devuelve `Next: none` (docs-only), salteá a Phase 4 (publishing) con un mensaje apropiado.
+
+5. Muestra el **[Phase Report](#phase-report-format)** con la tabla de routing.
+6. **STOP**. Espera confirmación antes de avanzar.
+
+### Phase 3: Review (Parallel or Lite)
+
+1. Lee `code-review/{pr}/route` para obtener la lista exacta de reviewers a ejecutar.
+
+2. **Si el router seleccionó `cr-lite`** (PR chico/mediano):
+   - Lanza SOLO `cr-lite` como único reviewer:
+     - `pr-number`
+     - `topic_key_data`: `code-review/{pr-number}/data`
+     - `topic_key_review`: `code-review/{pr-number}/reviews/lite`
+     - `artifact_store_mode`: `engram`
+     - `inline_data_diff`: `{diff content}`
+   - Salteá el resto de este paso (no lances especialistas).
+   - **Avanzá al paso 4** (esperar resultado).
+
+3. **Si el router seleccionó especialistas** (full review):
+   - Lanza SOLO los reviewers con prioridad REQUIRED o RECOMMENDED, **en paralelo**:
+
+   **cr-correctness** (si seleccionado):
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
-   - `topic_key_categories`: `code-review/{pr-number}/categories/performance`
+   - `topic_key_review`: `code-review/{pr-number}/reviews/correctness`
    - `artifact_store_mode`: `engram`
    - `inline_data_diff`: `{diff content}`
 
-   **C. cr-architecture-categorizer**
+   **cr-architecture** (si seleccionado):
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
-   - `topic_key_categories`: `code-review/{pr-number}/categories/architecture`
+   - `topic_key_review`: `code-review/{pr-number}/reviews/architecture`
    - `artifact_store_mode`: `engram`
    - `inline_data_diff`: `{diff content}`
 
-   **D. cr-react-analyzer**
+   **cr-security** (si seleccionado):
    - `pr-number`
    - `topic_key_data`: `code-review/{pr-number}/data`
-   - `topic_key_review`: `code-review/{pr-number}/categories/react-vercel`
+   - `topic_key_review`: `code-review/{pr-number}/reviews/security`
    - `artifact_store_mode`: `engram`
    - `inline_data_diff`: `{diff content}`
 
-3. Espera a que los 4 retornen.
+   **cr-reliability** (si seleccionado):
+   - `pr-number`
+   - `topic_key_data`: `code-review/{pr-number}/data`
+   - `topic_key_review`: `code-review/{pr-number}/reviews/reliability`
+   - `artifact_store_mode`: `engram`
+   - `inline_data_diff`: `{diff content}`
+
+   **cr-performance** (si seleccionado):
+   - `pr-number`
+   - `topic_key_data`: `code-review/{pr-number}/data`
+   - `topic_key_review`: `code-review/{pr-number}/reviews/performance`
+   - `artifact_store_mode`: `engram`
+   - `inline_data_diff`: `{diff content}`
+
+   **cr-quality** (si seleccionado):
+   - `pr-number`
+   - `topic_key_data`: `code-review/{pr-number}/data`
+   - `topic_key_review`: `code-review/{pr-number}/reviews/quality`
+   - `artifact_store_mode`: `engram`
+   - `inline_data_diff`: `{diff content}`
+
+3. Espera a que todos los lanzados retornen.
 4. Si alguno retorna `blocked`, reporta al usuario y detén el pipeline.
-5. Si alguno retorna `partial`, advierte al usuario pero continúa con los índices que sí llegaron.
-6. Recoge los resultados de cada categorizador. Si algún categorizador incluyó su artifact en `detailed_report` (por no poder usar `mem_save`), el orchestrator DEBE persistirlo a Engram manualmente.
-7. Verifica que los 4 artefactos estén disponibles (en Engram o en los resultados inline).
-8. Muestra el **[Phase Report](#phase-report-format)** con la tabla de los 4 categorizadores y sus hallazgos.
-9. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 3.
+5. Si alguno retorna `partial`, advierte al usuario pero continúa.
+6. Recoge los resultados. Si algún reviewer incluyó su artifact en `detailed_report`, persistilo a Engram manualmente.
 
-### Phase 3: Analysis
+7. Muestra el **[Phase Report](#phase-report-format)** con la tabla de reviewers ejecutados y sus hallazgos.
+8. **STOP**. Espera confirmación antes de avanzar.
 
-1. Lee los artifacts de categorización desde Engram o desde los resultados inline de los sub-agentes.
-2. Inyecta el contenido de las categorías inline en el prompt de `cr-analyzer` como fallback de datos.
-3. Lanza `cr-analyzer` pasando:
-   - `pr-number`
-   - `topic_key_categories`:
-     - `code-review/{pr-number}/categories/security`
-     - `code-review/{pr-number}/categories/performance`
-     - `code-review/{pr-number}/categories/architecture`
-     - `code-review/{pr-number}/categories/react-vercel` (optional)
-   - `topic_key_data`: `code-review/{pr-number}/data` (optional)
-   - `topic_key_review`: `code-review/{pr-number}/review`
-   - `inline_categories`: `{contenido de los 3+ indices de categorías}` (fallback inline)
-   - Referencia a convenciones del repo (ej: path a `AGENTS.md`), si aplica.
-4. Cuando el analyzer retorne, recoge el review. Si incluyó el artifact en `detailed_report`, persístelo a Engram manualmente.
-5. Muestra el **[Phase Report](#phase-report-format)** con los findings generados.
-6. **STOP**. Espera confirmación del usuario antes de avanzar a Phase 4.
-
-### Phase 4: Publishing
+### Phase 4: Publishing (Publisher + Merger)
 
 1. Lanza `cr-publisher` pasando:
    - `pr-number`
-   - `topic_key_review`: `code-review/{pr-number}/review`
-   - `topic_key_react_review`: `code-review/{pr-number}/categories/react-vercel` (optional — if present, merged into final comment)
+   - `topic_key_reviews`:
+     - **Lite path**: `code-review/{pr-number}/reviews/lite` (único, si el router eligió cr-lite)
+     - **Full path**: solo los que se ejecutaron:
+       - `code-review/{pr-number}/reviews/correctness` (si ejecutado)
+       - `code-review/{pr-number}/reviews/architecture` (si ejecutado)
+       - `code-review/{pr-number}/reviews/security` (si ejecutado)
+       - `code-review/{pr-number}/reviews/reliability` (si ejecutado)
+       - `code-review/{pr-number}/reviews/performance` (si ejecutado)
+       - `code-review/{pr-number}/reviews/quality` (si ejecutado)
+   - `topic_key_route`: `code-review/{pr-number}/route` (para contexto de clasificación)
    - `topic_key_formatted`: `code-review/{pr-number}/formatted`
    - `mode`: `format_only` o `publish`
+   - `inline_reviews`: `{contenido de todos los reviews ejecutados}` (fallback inline)
+
 2. Muestra el resultado al usuario y pide confirmación para subir a GitHub.
 3. Si el usuario confirma, ordena a `cr-publisher` subir el comentario.
 
@@ -305,30 +344,36 @@ Después de cada fase, el orquestador DEBE mostrar este reporte al usuario y **e
 **Estado**: {✅ completado | ⚠️ parcial | ❌ bloqueado}
 
 ### Resumen
-{1-2 oraciones sintetizando los executive_summary de los sub-agentes}
+{1-2 oraciones sintetizando los resultados}
 
 ### Resultados por sub-agente
 
 | Sub-agente | Hallazgos | Estado |
 |------------|-----------|--------|
 | cr-fetcher | {N archivos, X líneas} | ✅/⚠️/❌ |
-| cr-security | {N findings, nivel de riesgo} | ✅/⚠️/❌ |
-| cr-performance | {N findings} | ✅/⚠️/❌ |
-| cr-architecture | {N findings} | ✅/⚠️/❌ |
-| cr-react-analyzer | {N findings} | ✅/⚠️/❌ |
-| cr-analyzer | {N findings, verdict} | ✅/⚠️/❌ |
+| cr-router | {N reviewers seleccionados, riesgo} | ✅/⚠️/❌ |
+| cr-lite | {N findings, verdict} — solo si fue lite path | ✅/⚠️/❌ |
+| cr-correctness | {N findings, verdict} — solo si fue full path | ✅/⚠️/❌ |
+| cr-architecture | {N findings, verdict} — solo si fue full path | ✅/⚠️/❌ |
+| cr-security | {N findings, verdict} — solo si fue full path | ✅/⚠️/❌ |
+| cr-reliability | {N findings, verdict} — solo si fue full path | ✅/⚠️/❌ |
+| cr-performance | {N findings, verdict} — solo si fue full path | ✅/⚠️/❌ |
+| cr-quality | {N findings, verdict} — solo si fue full path | ✅/⚠️/❌ |
 | cr-publisher | {formato listo / no listo} | ✅/⚠️/❌ |
 
 ### Riesgos
-{riesgos consolidados de todos los sub-agentes, o "Ninguno"}
+{riesgos consolidados, o "Ninguno"}
 
 ### Artefactos generados
 - `code-review/{pr}/data`
-- `code-review/{pr}/categories/security`
-- `code-review/{pr}/categories/performance`
-- `code-review/{pr}/categories/architecture`
-- `code-review/{pr}/categories/react-vercel`
-- `code-review/{pr}/review`
+- `code-review/{pr}/route`
+- `code-review/{pr}/reviews/lite` (si fue lite path)
+- `code-review/{pr}/reviews/correctness` (si ejecutado)
+- `code-review/{pr}/reviews/architecture` (si ejecutado)
+- `code-review/{pr}/reviews/security` (si ejecutado)
+- `code-review/{pr}/reviews/reliability` (si ejecutado)
+- `code-review/{pr}/reviews/performance` (si ejecutado)
+- `code-review/{pr}/reviews/quality` (si ejecutado)
 - `code-review/{pr}/formatted`
 
 **¿Avanzar a la siguiente fase?**
@@ -344,37 +389,34 @@ Después de cada fase, el orquestador DEBE mostrar este reporte al usuario y **e
 
 ## Result Contract
 
-Every sub-agent MUST return a structured envelope. No free-form text.
+Every sub-agent MUST return a structured envelope matching `cr-common.md` Section D. No free-form text.
 
-| Field               | Type   | Required | Description                                                 |
-| ------------------- | ------ | -------- | ----------------------------------------------------------- |
-| `status`            | enum   | YES      | `success`, `partial`, or `blocked`                          |
-| `executive_summary` | string | YES      | 1-3 sentence summary of what was done                       |
-| `detailed_report`   | string | NO       | Full output. Omit if already inline in summary.             |
-| `artifacts`         | list   | YES      | Artifact keys/paths written. Empty list if none.            |
-| `next_recommended`  | string | YES      | Next phase to run, or `"none"`                              |
-| `risks`             | list   | YES      | Risks discovered. Empty list if none.                       |
-| `skill_resolution`  | enum   | YES      | `injected`, `fallback-registry`, `fallback-path`, or `none` |
+| Field | Format | Required | Description |
+|-------|--------|----------|-------------|
+| `Status` | enum | YES | `success`, `partial`, or `blocked` |
+| `Summary` | string | YES | 1-3 sentence summary of what was done |
+| `detailed_report` | string | NO | Full output. Used as fallback when Engram persistence fails — orchestrator persists it. Omit if already in artifact store. |
+| `Artifacts` | list | YES | Artifact keys/paths written. Empty list if none. |
+| `Next` | string | YES | Next phase to run, or `"none"` |
+| `Risks` | list | YES | Risks discovered. Empty list if none. |
+| `Skill Resolution` | enum | YES | `injected`, `fallback-registry`, `fallback-path`, or `none` |
+| `Reviewers` | list | NO | (cr-router only) Comma-separated list of selected reviewer names |
 
 ### Status Values
 
-| Status    | Meaning                   | Orchestrator Action                         |
-| --------- | ------------------------- | ------------------------------------------- |
-| `success` | Phase completed fully     | Update state, advance DAG                   |
+| Status | Meaning | Orchestrator Action |
+|--------|---------|---------------------|
+| `success` | Phase completed fully | Update state, advance DAG |
 | `partial` | Phase completed with gaps | Update state, warn user, suggest next phase |
-| `blocked` | Phase cannot proceed      | STOP, report blocker to user                |
-
-### Skill Resolution Values
-
-`injected`, `fallback-registry`, `fallback-path`, or `none`. See [Delegation Boundary](#skill-resolution--feedback-loop) for orchestrator actions.
+| `blocked` | Phase cannot proceed | STOP, report blocker to user |
 
 ### Example
 
 ```markdown
 **Status**: success
-**Summary**: Diff y metadata obtenidos para PR #42.
+**Summary**: Diff y metadata obtenidos para PR #42. 12 archivos, +340/-89 líneas.
 **Artifacts**: Engram `code-review/42/data`
-**Next**: cr-analyzer
+**Next**: cr-router
 **Risks**: None
 **Skill Resolution**: injected
 ```

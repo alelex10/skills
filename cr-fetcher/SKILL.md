@@ -22,7 +22,7 @@ From the orchestrator:
 
 ## Data Contract
 
-> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/_shared/cr-common.md`.
+> Follow all sections (A: skill resolution, B: retrieval, C: persistence, D: return envelope) from `skills/common/cr-common.md`.
 
 - **engram**: Save artifact as `code-review/{pr-number}/data`. Update state as `code-review/{pr-number}/state`.
 - **openspec**: Read and write per `skills/_shared/openspec-convention.md`.
@@ -33,7 +33,7 @@ From the orchestrator:
 
 ### Step 1: Load Skills
 
-Follow **Section A** from `skills/_shared/cr-common.md`.
+Follow **Section A** from `skills/common/cr-common.md`.
 
 ### Step 2: Validate Repository Match (MANDATORY)
 
@@ -67,11 +67,11 @@ Before fetching any data, verify the local repository matches the PR's repositor
 
 - `gh pr view <pr-number> --comments` to capture any existing discussions relevant to the review.
 
-### Step 6: Persist Artifact
+### Step 6: Persist Artifact (Authoritative)
 
-**This step is MANDATORY — do NOT skip it.**
+**This step is MANDATORY — do NOT skip it. The orchestrator depends on you to persist.**
 
-Follow **Section C** from `skills/_shared/cr-common.md`.
+Follow **Section C** from `skills/common/cr-common.md`.
 - artifact: `data`
 - topic_key: `code-review/{pr-number}/data`
 - type: `discovery`
@@ -85,7 +85,7 @@ Content format:
 **Comments**: [Previous comments if they exist]
 ```
 
-Also update the flow state:
+Also update the flow state (you are the authoritative source for this phase):
 - topic_key: `code-review/{pr-number}/state`
 - type: `config`
 - Content must include at least `status: fetching` and pointers to `code-review/{pr-number}/data`.
@@ -98,7 +98,7 @@ Return to the orchestrator:
 **Status**: success | partial | blocked
 **Summary**: Fetched full diff and metadata for PR #{pr-number}. {N} files changed, {M} lines.
 **Artifacts**: `code-review/{pr-number}/data`
-**Next**: cr-categorizer
+**Next**: cr-router
 **Risks**: {diff size warning or "None"}
 **Skill Resolution**: injected | fallback-registry | fallback-path | none
 ```
@@ -110,4 +110,4 @@ Return to the orchestrator:
 - ALWAYS report `gh` errors clearly (e.g., not authenticated, PR not found).
 - ALWAYS verify the diff is not empty before persisting.
 - **Size budget**: Data artifact has no hard word limit, but if >50 files, flag in Return Summary for orchestrator awareness.
-- Return envelope per **Section D** from `skills/_shared/cr-common.md`.
+- Return envelope per **Section D** from `skills/common/cr-common.md`.

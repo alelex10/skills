@@ -6,7 +6,7 @@ This file defines the shared contract across all `cr-*` skills: how to load proj
 
 All `cr-*` skills reference this file via:
 ```
-> Follow **Section A** (skill resolution), **Section B** (retrieval), **Section C** (persistence), and **Section D** (return envelope) from `skills/_shared/cr-common.md`.
+> Follow **Section A** (skill resolution), **Section B** (retrieval), **Section C** (persistence), and **Section D** (return envelope) from `skills/common/cr-common.md`.
 ```
 
 ---
@@ -29,16 +29,30 @@ If this block is absent from the prompt, the sub-agent should check for a `## Pr
 
 CR artifacts use these topic_key patterns:
 
-| Artifact | topic_key | Required by |
-|----------|-----------|-------------|
-| PR Raw Data | `code-review/{pr-number}/data` | fetcher, all categorizers, analyzer, publisher |
-| Security Categories | `code-review/{pr-number}/categories/security` | analyzer |
-| Performance Categories | `code-review/{pr-number}/categories/performance` | analyzer |
-| Architecture Categories | `code-review/{pr-number}/categories/architecture` | analyzer |
-| React Review | `code-review/{pr-number}/categories/react-vercel` | publisher (optional) |
-| Analyzed Review | `code-review/{pr-number}/review` | publisher |
-| Formatted Review | `code-review/{pr-number}/formatted` | publisher (output) |
-| State | `code-review/{pr-number}/state` | orchestrator |
+| Artifact | topic_key | Produced By | Consumed By |
+|----------|-----------|-------------|-------------|
+| PR Raw Data | `code-review/{pr-number}/data` | cr-fetcher | Router, all reviewers, publisher |
+| Route Plan | `code-review/{pr-number}/route` | cr-router | Publisher |
+| Lite Review | `code-review/{pr-number}/reviews/lite` | cr-lite | cr-publisher |
+| Correctness Review | `code-review/{pr-number}/reviews/correctness` | cr-correctness | cr-publisher |
+| Architecture Review | `code-review/{pr-number}/reviews/architecture` | cr-architecture | cr-publisher |
+| Security Review | `code-review/{pr-number}/reviews/security` | cr-security | cr-publisher |
+| Reliability Review | `code-review/{pr-number}/reviews/reliability` | cr-reliability | cr-publisher |
+| Performance Review | `code-review/{pr-number}/reviews/performance` | cr-performance | cr-publisher |
+| Quality Review | `code-review/{pr-number}/reviews/quality` | cr-quality | cr-publisher |
+| Formatted Review | `code-review/{pr-number}/formatted` | cr-publisher | GitHub (via gh CLI) |
+| State | `code-review/{pr-number}/state` | orchestrator | orchestrator (recovery) |
+| Patterns | `code-review-patterns/{category}` | cr-learning | All reviewers (optional) |
+
+### Legacy Artifact Keys (backward compatibility)
+
+| Old Key | New Key | Notes |
+|---------|---------|-------|
+| `code-review/{pr}/categories/security` | `code-review/{pr}/reviews/security` | Renamed for clarity |
+| `code-review/{pr}/categories/performance` | `code-review/{pr}/reviews/performance` | Renamed for clarity |
+| `code-review/{pr}/categories/architecture` | `code-review/{pr}/reviews/architecture` | Renamed for clarity |
+| `code-review/{pr}/categories/react-vercel` | REMOVED | Replaced by generalist reviewers |
+| `code-review/{pr}/review` | REMOVED | Each reviewer writes its own review |
 
 ### 2-Step Retrieval Protocol
 
@@ -93,7 +107,7 @@ mem_save(
 )
 ```
 
-Step 2 — update state (orchestrator only):
+Step 2 — update state (data producer for this phase):
 ```
 mem_save(
     title: "code-review/{pr-number}/state",
@@ -141,18 +155,3 @@ Every CR sub-agent MUST return this exact structured envelope:
 | `fallback-registry`| Self-loaded from skill registry               |
 | `fallback-path`    | Self-loaded via SKILL.md path                 |
 | `none`             | No skills loaded                              |
-
----
-
-## Artifact Type Reference
-
-| Artifact | Produced By | Consumed By | Content |
-|----------|-------------|-------------|---------|
-| `data` | cr-fetcher | All categorizers, analyzer, publisher | Full diff + PR metadata + comments |
-| `categories/security` | cr-security-categorizer | cr-analyzer | Security smell index |
-| `categories/performance` | cr-performance-categorizer | cr-analyzer | Performance smell index |
-| `categories/architecture` | cr-architecture-categorizer | cr-analyzer | Architecture smell index |
-| `categories/react-vercel` | cr-react-analyzer | cr-publisher (optional) | React/Vercel complete review |
-| `review` | cr-analyzer | cr-publisher | Structured findings |
-| `formatted` | cr-publisher | GitHub (via gh CLI) | Formatted markdown |
-| `state` | orchestrator | orchestrator (recovery) | DAG state |
