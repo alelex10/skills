@@ -37,6 +37,7 @@ Include these based on need:
 | 6 | Response Format | Complex return summary format | `references/template-pattern-response-format.md` |
 | 7 | Quality Gates | Skill classifies findings by severity | `references/template-pattern-quality-gates.md` |
 | 8 | Reference Appendix | Quick reference material | `references/template-pattern-reference-appendix.md` |
+| 9 | Configuration | Skill needs per-project setup state (credentials, IDs, schemas, prefs) | `references/template-pattern-configuration.md` |
 
 ## Purpose Template
 
@@ -130,6 +131,36 @@ Use these patterns within Rules:
 | Hard Gate | `GATE: Do NOT proceed until [condition]` | Absolute blocking condition |
 | STOP | `If [blocking condition], STOP and report` | Abort execution |
 
+## Configuration Template
+
+```markdown
+## Configuration
+
+**Backend**: `local` | `engram` | `hybrid` (chosen at setup)
+
+**Locations**:
+- local: `.atl/[skill-name]/config.yaml`
+- engram: topic `[skill-name]/{project}/config`
+
+**Detection**: artifact presence + `version` match. If missing or outdated → read `references/setup.md` and run that flow.
+
+**Schema** (see `templates-default/config.yaml.tmpl` for the full annotated shape):
+
+```yaml
+version: 1
+configured_at: <ISO 8601>
+storage:
+  backend: local | engram | hybrid
+[skill-specific-fields]:
+  ...
+```
+```
+
+Coupling rules:
+- Configuration is OPTIONAL and INDEPENDENT of Data Contract. A skill can have one, both, or neither.
+- If you include Configuration, ship `references/setup.md` (setup walkthrough) and `templates-default/config.yaml.tmpl` (annotated default).
+- Never put installation state (booleans like `configured: true`) inside SKILL.md — the artifact's presence is the boolean.
+
 ## Data Contract Coupling Rules
 
 - **Data Contract includes reading AND writing together** — never one without the other
@@ -203,5 +234,6 @@ Return structured review findings.
   - `template-pattern-response-format.md`
   - `template-pattern-quality-gates.md`
   - `template-pattern-reference-appendix.md`
+  - `template-pattern-configuration.md`
 
 - **Orchestrator pattern**: See `skill-orchestrator-pattern` SKILL.md for coordination patterns

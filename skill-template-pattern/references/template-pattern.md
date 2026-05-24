@@ -19,6 +19,7 @@ Toda skill sigue **4 invariantes** y **4 opcionales**. Los invariantes son oblig
 | 6 | Response Format | El Return Summary tiene un formato complejo que merece su propia definición. | `template-pattern-response-format.md` |
 | 7 | Quality Gates | La skill evalúa, verifica o audita y necesita clasificar findings por severidad. | `template-pattern-quality-gates.md` |
 | 8 | Reference Appendix | Material de consulta rápida (tablas, catálogos de patrones prohibidos, matrices de decisión) que no cabe en Rules. | `template-pattern-reference-appendix.md` |
+| 9 | Configuration | La skill necesita estado de setup por-proyecto (credenciales, IDs, schemas, preferencias del usuario). | `template-pattern-configuration.md` |
 
 ## Acoplamiento
 
@@ -26,6 +27,8 @@ Toda skill sigue **4 invariantes** y **4 opcionales**. Los invariantes son oblig
 - Si incluís Data Contract, `Artifact Store Mode` es obligatorio en What You Receive
 - Si NO incluís Data Contract, What You Receive no necesita Artifact Store Mode
 - Si la skill emite findings clasificados (CRITICAL/WARNING/SUGGESTION), Quality Gates y Response Format van juntos — el Response Format debe incluir el campo `severity`
+- **Configuration es independiente de Data Contract** — pueden ir juntos, solo uno, o ninguno. Configuration es estado de instalación (setup); Data Contract es lectura/escritura de artifacts en runtime
+- Si incluís Configuration, son obligatorios `references/setup.md` (walkthrough) y `templates-default/config.yaml.tmpl` (default anotado)
 
 ## Ensamblaje
 

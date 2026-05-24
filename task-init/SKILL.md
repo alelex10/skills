@@ -16,7 +16,71 @@ Orchestrator skill that bootstraps the work environment for a task:
 3. Pushes an empty commit and opens a draft PR with title, body, assignee, and in-progress label
 4. Updates the Airtable record status to in-progress
 
-The skill replaces 6+ manual steps with a single command. It calls the `mcp__claude_ai_Airtable__*` tools directly for Airtable I/O — no script generation, no sub-agent delegation.
+The skill replaces 6+ manual steps with a single command.
+
+---
+
+## Execution Mode (MANDATORY — read first)
+
+This skill has **two modes**:
+
+### Mode A — Setup (interactive, runs in the main session)
+
+Triggered the first time it runs for a project (no config at `.atl/task-init/config.yaml` or engram topic `task-init/{project}/config`). Setup has many interactive questions (pick base, table, fields, labels, branch base) that cannot be defaulted. Run it inline in the main session.
+
+### Mode B — Execution (autonomous subagent, Haiku)
+
+Triggered every subsequent run. The orchestrator MUST delegate to the **`task-init-runner`** subagent via the Agent tool, using `model: "haiku"` to save tokens. The subagent runs the Flow section below with the autonomous defaults documented in its agent file.
+
+Decision tree on every invocation:
+
+```
+1. Check if config exists:
+   - local backend: file `.atl/task-init/config.yaml`
+   - engram backend: mem_search topic_key `task-init/{project}/config`
+
+2. If NO config → run Mode A (Setup) inline.
+   At the end of setup, return control to the user and tell them to run /task-init again
+   to actually execute the flow. Do NOT chain into Mode B automatically — the user may want
+   to edit the freshly-created config or pr.tmpl first.
+
+3. If config exists → run Mode B:
+   Call Agent tool with:
+     subagent_type: "task-init-runner"
+     model: "haiku"
+     description: "Run task-init for task <id|filter>"
+     prompt: <see template below>
+
+   Wait for the subagent's structured report, then summarize to the user:
+     - PR URL
+     - Branch (created or reused)
+     - Airtable status updated (yes/no)
+     - If stash was created → remind: `git stash pop` when ready
+     - Any warnings
+     - Next step
+```
+
+### Subagent prompt template
+
+```
+Project: {project_name}
+Backend: {local | engram}
+
+Invocation: {one of: task_id=<N> | --mine | --resume | --status | --all}
+
+Read ~/.claude/skills/task-init/SKILL.md (Flow section) and execute it with your
+autonomous defaults. Do NOT ask the user anything — the user is not in your loop.
+
+Config location:
+  - local:  .atl/task-init/config.yaml + .atl/task-init/templates/pr.tmpl
+  - engram: topics task-init/{project}/config and task-init/{project}/pr-template
+
+Return the structured final report defined in your agent file.
+```
+
+The orchestrator does NOT execute the Flow itself when Mode B applies. Its only job is: detect config presence, delegate to the subagent, forward the report.
+
+---
 
 ---
 

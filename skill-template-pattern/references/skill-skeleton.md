@@ -31,6 +31,29 @@ From the orchestrator:
 - **none**: Use only what the orchestrator provides. Return result only. Never create or modify project files.
 [ENDIF]
 
+[IF HAS CONFIGURATION]
+## Configuration
+
+**Backend**: `local` | `engram` | `hybrid` (chosen at setup)
+
+**Locations**:
+- local: `.atl/[skill-name]/config.yaml`
+- engram: topic `[skill-name]/{project}/config`
+
+**Detection**: artifact presence + `version` match. If missing or outdated → read `references/setup.md` and run that flow.
+
+**Schema** (full annotated shape in `templates-default/config.yaml.tmpl`):
+
+```yaml
+version: 1
+configured_at: <ISO 8601>
+storage:
+  backend: local | engram | hybrid
+[skill-specific-fields]:
+  ...
+```
+[ENDIF]
+
 ## What to Do
 
 ### Step 1: Load Skills
@@ -120,6 +143,12 @@ Return to the orchestrator:
 [IF HAS QUALITY GATES]
 - NEVER proceed past [STEP NAME] with CRITICAL findings unresolved
 [ENDIF]
+[IF HAS CONFIGURATION]
+- Before any work, check that config exists and `version` matches. If not, run setup from `references/setup.md` before continuing.
+- Never write config values inline in code or in SKILL.md — they belong in the configured artifact.
+- Never edit the user's config without confirmation (present a diff of what will change).
+- When persisting config to engram, use `capture_prompt: false`.
+[ENDIF]
 - Return envelope per **Section D** from `[skill-common-file]`.
 
 [IF HAS REFERENCE APPENDIX]
@@ -143,7 +172,8 @@ Return to the orchestrator:
 | 4 | ¿La skill evalúa/verifica/audita? | Sí → incluir Quality Gates + campo `severity` en Response Format. No → omitir ambos. |
 | 5 | ¿La skill tiene bloqueos entre pasos? | Sí → incluir guard clauses, hard gates y/o STOP conditions en Rules. |
 | 6 | ¿La skill necesita material de consulta rápido? | Sí → incluir Reference Appendix (tabla, catálogo de patrones, matriz). No → omitir. |
-| 7 | Reemplazar todos los `[PLACEHOLDERS]` | Cada placeholder corresponde a una decisión de dominio específica de tu skill. |
+| 7 | ¿La skill necesita estado de setup por-proyecto (credenciales, IDs, schemas, preferencias)? | Sí → incluir Configuration + crear `references/setup.md` + `templates-default/config.yaml.tmpl`. No → omitir. |
+| 8 | Reemplazar todos los `[PLACEHOLDERS]` | Cada placeholder corresponde a una decisión de dominio específica de tu skill. |
 
 ## Ejemplo mínimo (sin Data Contract, sin Response Format)
 
